@@ -36,6 +36,8 @@ env/
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+# But allow Colab notebooks
+!colab/*.ipynb
 
 # Data & Models
 data/
