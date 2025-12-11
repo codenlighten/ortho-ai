@@ -1,6 +1,9 @@
 """
 Kernelized Orthogonal Attention (KOA) with Multi-Head Architecture
 
+Copyright (c) 2025 Gregory Ward - SmartLedger.Technology
+Licensed under the MIT License (see LICENSE file)
+
 Combines:
 1. Favor+ kernelized attention (linear complexity)
 2. Orthogonal weight matrices (for DFA compatibility)

@@ -2,6 +2,8 @@
 
 Efficient LLM training through combined Direct Feedback Alignment and Kernelized Orthogonal Attention.
 
+**Copyright (c) 2025 Gregory Ward - SmartLedger.Technology**
+
 ## Project Structure
 
 ```
@@ -74,4 +76,6 @@ isort src/ tests/
 
 ## License
 
-MIT (or specify your license)
+MIT License - See [LICENSE](LICENSE) file for details.
+
+**Copyright (c) 2025 Gregory Ward - SmartLedger.Technology**

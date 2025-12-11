@@ -1,6 +1,9 @@
 """
 Orthogonality Loss for enforcing orthogonal weight matrices.
 
+Copyright (c) 2025 Gregory Ward - SmartLedger.Technology
+Licensed under the MIT License (see LICENSE file)
+
 Computes: L_ortho = λ(t) * Σ_l ||W_l^T W_l - I||²_F
 
 with warmup scheduler: λ(t) = λ_max * min(1, t / t_warmup)

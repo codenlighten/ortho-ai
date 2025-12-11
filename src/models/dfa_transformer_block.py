@@ -1,6 +1,9 @@
 """
 DFA Transformer Block
 
+Copyright (c) 2025 Gregory Ward - SmartLedger.Technology
+Licensed under the MIT License (see LICENSE file)
+
 Combines KOA attention with feedforward network and applies hybrid DFA/BP training.
 Uses DFA between blocks, standard BP within blocks (per expert review).
 """

@@ -1,6 +1,9 @@
 """
 Favor+ Kernel Approximation (Performer's Positive Orthogonal Random Features)
 
+Copyright (c) 2025 Gregory Ward - SmartLedger.Technology
+Licensed under the MIT License (see LICENSE file)
+
 Based on: Choromanski et al., "Rethinking Attention with Performers" (2020)
 https://arxiv.org/abs/2009.14794
 

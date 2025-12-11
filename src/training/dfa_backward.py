@@ -1,6 +1,9 @@
 """
 DFA Backward Hook for PyTorch Autograd Integration
 
+Copyright (c) 2025 Gregory Ward - SmartLedger.Technology
+Licensed under the MIT License (see LICENSE file)
+
 Implements Direct Feedback Alignment by:
 1. Storing activations during forward pass
 2. Computing local errors: e_l = B_l δ_L

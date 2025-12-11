@@ -1,6 +1,9 @@
 """
 DFA Feedback Matrix Implementation
 
+Copyright (c) 2025 Gregory Ward - SmartLedger.Technology
+Licensed under the MIT License (see LICENSE file)
+
 Manages fixed random feedback matrices B_l for Direct Feedback Alignment.
 
 Based on:
