@@ -1,0 +1,70 @@
+# OKADFA Configuration
+# Experimental setup for Orthogonalized Kernel Attention with Direct Feedback Alignment
+
+model:
+  name: "okadfa_tiny"
+  hidden_size: 512
+  num_layers: 6
+  num_heads: 8
+  vocab_size: 50257  # GPT-2 vocab size
+  max_seq_len: 512
+  dropout: 0.1
+
+# Direct Feedback Alignment Settings
+dfa:
+  enabled: true
+  feedback_matrix_init: "gaussian"  # gaussian, orthogonal
+  feedback_scale: 1.0  # 1/sqrt(output_dim_final)
+  fixed_seed: 42
+
+# Kernelized Orthogonal Attention Settings
+koa:
+  enabled: true
+  kernel_type: "favor_plus"  # favor_plus, random_features
+  num_random_features_multiplier: 2  # M = multiplier * d_k
+  orthogonality_constraint: true
+  orthogonality_weight: 1.0e-4  # lambda penalty
+  orthogonality_warmup_steps: 1000  # linear warmup
+  apply_to_qk: true  # apply orthogonality to Q, K projections
+  apply_to_v: false  # ablation: apply to V projection
+
+# Training Settings
+training:
+  batch_size: 32
+  gradient_accumulation_steps: 4
+  max_steps: 50000
+  warmup_steps: 1000
+  learning_rate: 3.0e-4
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  optimizer: "adamw"
+  scheduler: "cosine"
+  
+  # Logging
+  log_interval: 100
+  eval_interval: 1000
+  save_interval: 5000
+  
+# Dataset Settings
+data:
+  dataset_name: "openwebtext"  # or "c4"
+  subset_size: 10_000_000_000  # 10B tokens
+  seq_length: 512
+  num_workers: 4
+
+# Diagnostics Settings
+diagnostics:
+  enabled: true
+  gradient_comparison: true  # Compare DFA vs BP gradients
+  attention_fidelity: true  # Track Q K^T approximation quality
+  orthogonality_tracking: true  # Monitor ||W^T W - I||_F
+  sample_frequency: 100  # Log diagnostics every N steps
+  sample_batch_size: 4  # Small batch for diagnostic computations
+
+# Experiment Settings
+experiment:
+  name: "okadfa_phase1"
+  project: "ortho-ai-research"
+  wandb_enabled: false  # Set to true for W&B logging
+  output_dir: "./outputs"
+  seed: 42
