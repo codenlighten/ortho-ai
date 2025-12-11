@@ -54,7 +54,6 @@ class WikiTextTrainer:
         max_steps: int = 10000,
         warmup_steps: int = 500,
         grad_clip: float = 1.0,
-        ortho_lambda_start: float = 0.0,
         ortho_lambda_max: float = 1e-4,
         ortho_warmup_steps: Optional[int] = None,
         log_interval: int = 100,
@@ -75,7 +74,6 @@ class WikiTextTrainer:
             max_steps: Maximum training steps
             warmup_steps: LR warmup steps
             grad_clip: Gradient clipping threshold
-            ortho_lambda_start: Initial orthogonality penalty
             ortho_lambda_max: Maximum orthogonality penalty
             ortho_warmup_steps: Orthogonality warmup steps
             log_interval: Logging interval
@@ -123,7 +121,6 @@ class WikiTextTrainer:
             ortho_warmup_steps = int(0.1 * max_steps)  # 10% of training
         
         self.ortho_loss_fn = OrthogonalityLoss(
-            lambda_start=ortho_lambda_start,
             lambda_max=ortho_lambda_max,
             warmup_steps=ortho_warmup_steps,
         )
@@ -138,44 +135,38 @@ class WikiTextTrainer:
     def _setup_dfa_hooks(self):
         """Setup DFA backward hooks."""
         # Get all linear modules that should use DFA
-        dfa_modules = self.model.get_all_linear_modules()
+        dfa_modules = self.model.get_dfa_modules()
         
         if not dfa_modules:
             print("Warning: No DFA modules found!")
             return
         
         # Get output dimension (vocab size)
-        output_dim = self.model.lm_head.out_features
+        output_dim = self.model.output_projection.out_features
         
-        # Create feedback matrices for each module
-        self.feedback_matrices = []
-        self.dfa_hooks = []
-        
-        for i, module in enumerate(dfa_modules):
-            # Get module output dimension
+        # Collect all layer dimensions
+        layer_dims = []
+        for module in dfa_modules:
             if hasattr(module, 'out_features'):
-                module_output_dim = module.out_features
+                layer_dims.append(module.out_features)
             elif hasattr(module, 'embed_dim'):
-                module_output_dim = module.embed_dim
+                layer_dims.append(module.embed_dim)
             else:
-                module_output_dim = module.weight.shape[0]
-            
-            # Create feedback matrix
-            feedback_matrix = DFAFeedbackMatrix(
-                output_dim=module_output_dim,
-                final_output_dim=output_dim,
-            ).to(self.device)
-            
-            self.feedback_matrices.append(feedback_matrix)
-            
-            # Create and register hook
-            hook = DFABackwardHook(feedback_matrix)
-            self.dfa_hooks.append(hook)
+                layer_dims.append(module.weight.shape[0])
         
-        # Register all hooks at once
-        if self.dfa_hooks:
-            self.dfa_hooks[0].register_hooks(dfa_modules, list(range(len(dfa_modules))))
-            print(f"Registered {len(self.dfa_hooks)} DFA hooks")
+        # Create single DFAFeedbackMatrix manager for all layers
+        self.feedback_matrix = DFAFeedbackMatrix(
+            layer_dims=layer_dims,
+            output_dim=output_dim,
+        )
+        self.feedback_matrix = self.feedback_matrix.to(self.device)
+        
+        # Create single hook manager
+        self.dfa_hook = DFABackwardHook(self.feedback_matrix)
+        
+        # Register hooks on all modules
+        self.dfa_hook.register_hooks(dfa_modules, list(range(len(dfa_modules))))
+        print(f"Registered DFA hooks on {len(dfa_modules)} modules")
     
     def _warmup_lr(self, step: int) -> float:
         """Calculate learning rate with warmup."""
@@ -202,7 +193,7 @@ class WikiTextTrainer:
         )
         
         # Orthogonality loss
-        ortho_loss = self.ortho_loss_fn(self.model, self.step)
+        ortho_loss = self.model.get_orthogonality_loss(self.ortho_loss_fn)
         
         # Total loss
         total_loss = lm_loss + ortho_loss
@@ -383,8 +374,6 @@ def main():
                       help='Gradient clipping threshold')
     
     # Orthogonality
-    parser.add_argument('--ortho_lambda_start', type=float, default=0.0,
-                      help='Initial orthogonality penalty')
     parser.add_argument('--ortho_lambda_max', type=float, default=1e-4,
                       help='Maximum orthogonality penalty')
     parser.add_argument('--ortho_warmup_steps', type=int, default=None,
@@ -453,11 +442,7 @@ def main():
     # Create model
     print("Creating model...")
     if args.use_gpt2_small:
-        model = create_gpt2_small_okadfa(
-            vocab_size=args.vocab_size,
-            max_seq_length=args.seq_length,
-            num_random_features=args.num_random_features,
-        )
+        model = create_gpt2_small_okadfa(vocab_size=args.vocab_size)
     else:
         model = OKADFAModel(
             vocab_size=args.vocab_size,
@@ -465,7 +450,7 @@ def main():
             num_layers=args.num_layers,
             num_heads=args.num_heads,
             d_ff=args.d_ff,
-            max_seq_length=args.seq_length,
+            max_seq_len=args.seq_length,
             num_random_features=args.num_random_features,
         )
     
@@ -482,7 +467,6 @@ def main():
         max_steps=args.max_steps,
         warmup_steps=args.warmup_steps,
         grad_clip=args.grad_clip,
-        ortho_lambda_start=args.ortho_lambda_start,
         ortho_lambda_max=args.ortho_lambda_max,
         ortho_warmup_steps=args.ortho_warmup_steps,
         log_interval=args.log_interval,
