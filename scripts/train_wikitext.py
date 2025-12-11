@@ -26,7 +26,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import LambdaLR
 import math
 from tqdm import tqdm
 from typing import Optional
@@ -107,11 +107,16 @@ class WikiTextTrainer:
         )
         
         # LR scheduler (cosine with warmup)
-        self.scheduler = CosineAnnealingLR(
-            self.optimizer,
-            T_max=max_steps - warmup_steps,
-            eta_min=learning_rate * 0.1,
-        )
+        def lr_lambda(step):
+            if step < warmup_steps:
+                # Linear warmup
+                return (step + 1) / warmup_steps
+            else:
+                # Cosine annealing after warmup
+                progress = (step - warmup_steps) / (max_steps - warmup_steps)
+                return 0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * progress))
+        
+        self.scheduler = LambdaLR(self.optimizer, lr_lambda)
         
         # Loss functions
         self.lm_loss_fn = nn.CrossEntropyLoss()
@@ -168,12 +173,6 @@ class WikiTextTrainer:
         self.dfa_hook.register_hooks(dfa_modules, list(range(len(dfa_modules))))
         print(f"Registered DFA hooks on {len(dfa_modules)} modules")
     
-    def _warmup_lr(self, step: int) -> float:
-        """Calculate learning rate with warmup."""
-        if step < self.warmup_steps:
-            return (step + 1) / self.warmup_steps
-        return 1.0
-    
     def train_step(self, batch) -> dict:
         """Execute one training step."""
         self.model.train()
@@ -208,16 +207,11 @@ class WikiTextTrainer:
             self.grad_clip
         )
         
-        # Optimizer step with warmup
-        warmup_factor = self._warmup_lr(self.step)
-        for param_group in self.optimizer.param_groups:
-            param_group['lr'] = param_group['lr'] * warmup_factor
-        
+        # Optimizer step
         self.optimizer.step()
         
-        # LR scheduler (after warmup)
-        if self.step >= self.warmup_steps:
-            self.scheduler.step()
+        # LR scheduler (handles warmup internally with get_lr())
+        self.scheduler.step()
         
         self.step += 1
         
