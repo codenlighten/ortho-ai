@@ -39,6 +39,7 @@ env/
 
 # Data & Models
 data/
+!src/data/
 checkpoints/
 *.pt
 *.pth
