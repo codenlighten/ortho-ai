@@ -60,6 +60,8 @@ class WikiTextTrainer:
         eval_interval: int = 500,
         checkpoint_dir: str = './checkpoints',
         save_interval: int = 1000,
+        gradient_accumulation_steps: int = 1,
+        mixed_precision: bool = False,
     ):
         """
         Initialize trainer.
@@ -80,11 +82,29 @@ class WikiTextTrainer:
             eval_interval: Evaluation interval
             checkpoint_dir: Checkpoint directory
             save_interval: Checkpoint save interval
+            gradient_accumulation_steps: Gradient accumulation steps
+            mixed_precision: Use mixed precision (FP16/BF16)
         """
         self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
+        
+        # Optimization settings
+        self.gradient_accumulation_steps = gradient_accumulation_steps
+        self.mixed_precision = mixed_precision
+        
+        # Setup mixed precision
+        self.scaler = None
+        self.use_bf16 = False
+        if mixed_precision and device == 'cuda':
+            # Use BF16 if available (better for training), else FP16
+            self.use_bf16 = torch.cuda.is_bf16_supported()
+            if self.use_bf16:
+                print("✓ Using BF16 mixed precision training")
+            else:
+                print("✓ Using FP16 mixed precision training")
+                self.scaler = torch.cuda.amp.GradScaler()
         
         # Training hyperparameters
         self.max_steps = max_steps
@@ -182,45 +202,65 @@ class WikiTextTrainer:
         input_ids = input_ids.to(self.device)
         target_ids = target_ids.to(self.device)
         
-        # Forward pass
-        logits = self.model(input_ids)
+        # Mixed precision context
+        autocast_dtype = torch.bfloat16 if self.use_bf16 else torch.float16
+        autocast_enabled = self.mixed_precision and self.device == 'cuda'
         
-        # Language modeling loss
-        lm_loss = self.lm_loss_fn(
-            logits.reshape(-1, logits.size(-1)),
-            target_ids.reshape(-1)
-        )
+        # Forward pass with mixed precision
+        with torch.cuda.amp.autocast(enabled=autocast_enabled, dtype=autocast_dtype if autocast_enabled else torch.float32):
+            # Forward pass
+            logits = self.model(input_ids)
+            
+            # Language modeling loss
+            lm_loss = self.lm_loss_fn(
+                logits.reshape(-1, logits.size(-1)),
+                target_ids.reshape(-1)
+            )
+            
+            # Orthogonality loss
+            ortho_loss = self.model.get_orthogonality_loss(self.ortho_loss_fn)
+            
+            # Total loss (scale by accumulation steps)
+            total_loss = (lm_loss + ortho_loss) / self.gradient_accumulation_steps
         
-        # Orthogonality loss
-        ortho_loss = self.model.get_orthogonality_loss(self.ortho_loss_fn)
+        # Backward pass with gradient scaling
+        if self.scaler is not None:
+            self.scaler.scale(total_loss).backward()
+        else:
+            total_loss.backward()
         
-        # Total loss
-        total_loss = lm_loss + ortho_loss
-        
-        # Backward pass
-        self.optimizer.zero_grad()
-        total_loss.backward()
-        
-        # Gradient clipping
-        grad_norm = torch.nn.utils.clip_grad_norm_(
-            self.model.parameters(),
-            self.grad_clip
-        )
-        
-        # Optimizer step
-        self.optimizer.step()
-        
-        # LR scheduler (handles warmup internally with get_lr())
-        self.scheduler.step()
+        # Only update weights every N accumulation steps
+        if (self.step + 1) % self.gradient_accumulation_steps == 0:
+            # Gradient clipping
+            if self.scaler is not None:
+                self.scaler.unscale_(self.optimizer)
+            
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(),
+                self.grad_clip
+            )
+            
+            # Optimizer step
+            if self.scaler is not None:
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                self.optimizer.step()
+            
+            self.scheduler.step()
+            self.optimizer.zero_grad()
+        else:
+            grad_norm = 0.0  # Don't compute grad norm on accumulation steps
         
         self.step += 1
         
+        # Return actual loss (unscaled)
         return {
-            'loss': total_loss.item(),
+            'loss': (total_loss.item() * self.gradient_accumulation_steps),
             'lm_loss': lm_loss.item(),
             'ortho_loss': ortho_loss.item(),
             'lr': self.optimizer.param_groups[0]['lr'],
-            'grad_norm': grad_norm.item(),
+            'grad_norm': grad_norm if isinstance(grad_norm, float) else grad_norm.item(),
             'ortho_lambda': self.ortho_loss_fn.lambda_max,
         }
     
@@ -355,7 +395,11 @@ def main():
     
     # Training
     parser.add_argument('--batch_size', type=int, default=8,
-                      help='Batch size')
+                      help='Batch size (per GPU)')
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
+                      help='Gradient accumulation steps (effective batch = batch_size * accum_steps)')
+    parser.add_argument('--mixed_precision', action='store_true',
+                      help='Use mixed precision training (FP16/BF16 on A100)')
     parser.add_argument('--learning_rate', type=float, default=3e-4,
                       help='Learning rate')
     parser.add_argument('--weight_decay', type=float, default=0.1,
@@ -450,6 +494,17 @@ def main():
     
     print(f"Model created with {sum(p.numel() for p in model.parameters()):,} parameters")
     
+    # Print optimization settings
+    effective_batch_size = args.batch_size * args.gradient_accumulation_steps
+    print(f"\nOptimization Settings:")
+    print(f"  Batch size (per step): {args.batch_size}")
+    print(f"  Gradient accumulation: {args.gradient_accumulation_steps}")
+    print(f"  Effective batch size: {effective_batch_size}")
+    print(f"  Mixed precision: {args.mixed_precision}")
+    if args.mixed_precision and args.device == 'cuda':
+        is_bf16 = torch.cuda.is_bf16_supported()
+        print(f"  Precision type: {'BF16' if is_bf16 else 'FP16'}")
+    
     # Create trainer
     trainer = WikiTextTrainer(
         model=model,
@@ -467,6 +522,8 @@ def main():
         eval_interval=args.eval_interval,
         checkpoint_dir=args.checkpoint_dir,
         save_interval=args.save_interval,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        mixed_precision=args.mixed_precision,
     )
     
     # Train
